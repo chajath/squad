@@ -34,8 +34,10 @@ class BiDAF(nn.Module):
         self.emb = layers.Embedding(word_vectors=word_vectors,
                                     hidden_size=hidden_size,
                                     drop_prob=drop_prob)
+        
+        self.tag_emb = nn.Embedding(num_embeddings=52,embedding_dim=10,padding_idx=0)
 
-        self.enc = layers.RNNEncoder(input_size=hidden_size,
+        self.enc = layers.RNNEncoder(input_size=hidden_size + 10,
                                      hidden_size=hidden_size,
                                      num_layers=1,
                                      drop_prob=drop_prob)
@@ -51,16 +53,19 @@ class BiDAF(nn.Module):
         self.out = layers.BiDAFOutput(hidden_size=hidden_size,
                                       drop_prob=drop_prob)
 
-    def forward(self, cw_idxs, qw_idxs):
+    def forward(self, cw_idxs, ct, qw_idxs, qt):
         c_mask = torch.zeros_like(cw_idxs) != cw_idxs
         q_mask = torch.zeros_like(qw_idxs) != qw_idxs
         c_len, q_len = c_mask.sum(-1), q_mask.sum(-1)
 
-        c_emb = self.emb(cw_idxs)         # (batch_size, c_len, hidden_size)
-        q_emb = self.emb(qw_idxs)         # (batch_size, q_len, hidden_size)
+        c_emb = self.emb(cw_idxs)  # (batch_size, c_len, hidden_size)
+        q_emb = self.emb(qw_idxs)  # (batch_size, q_len, hidden_size)
+        
+        ct_emb = self.tag_emb(ct) # (batch_size, c_len, 10)
+        qt_emb = self.tag_emb(qt) # (batch_size, q_len, 10)
 
-        c_enc = self.enc(c_emb, c_len)    # (batch_size, c_len, 2 * hidden_size)
-        q_enc = self.enc(q_emb, q_len)    # (batch_size, q_len, 2 * hidden_size)
+        c_enc = self.enc(torch.cat((c_emb, ct_emb), 2), c_len)    # (batch_size, c_len, 2 * hidden_size)
+        q_enc = self.enc(torch.cat((q_emb, qt_emb), 2), q_len)    # (batch_size, q_len, 2 * hidden_size)
 
         att = self.att(c_enc, q_enc,
                        c_mask, q_mask)    # (batch_size, c_len, 8 * hidden_size)

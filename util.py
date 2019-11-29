@@ -47,8 +47,10 @@ class SQuAD(data.Dataset):
         dataset = np.load(data_path)
         self.context_idxs = torch.from_numpy(dataset['context_idxs']).long()
         self.context_char_idxs = torch.from_numpy(dataset['context_char_idxs']).long()
+        self.context_tags = torch.from_numpy(dataset['context_tags']).long()
         self.question_idxs = torch.from_numpy(dataset['ques_idxs']).long()
         self.question_char_idxs = torch.from_numpy(dataset['ques_char_idxs']).long()
+        self.question_tags = torch.from_numpy(dataset['ques_tags']).long()
         self.y1s = torch.from_numpy(dataset['y1s']).long()
         self.y2s = torch.from_numpy(dataset['y2s']).long()
 
@@ -57,7 +59,9 @@ class SQuAD(data.Dataset):
             batch_size, c_len, w_len = self.context_char_idxs.size()
             ones = torch.ones((batch_size, 1), dtype=torch.int64)
             self.context_idxs = torch.cat((ones, self.context_idxs), dim=1)
+            self.context_tags = torch.cat((ones, self.context_tags), dim=1)
             self.question_idxs = torch.cat((ones, self.question_idxs), dim=1)
+            self.question_tags = torch.cat((ones, self.question_tags), dim=1)
 
             ones = torch.ones((batch_size, 1, w_len), dtype=torch.int64)
             self.context_char_idxs = torch.cat((ones, self.context_char_idxs), dim=1)
@@ -75,8 +79,10 @@ class SQuAD(data.Dataset):
         idx = self.valid_idxs[idx]
         example = (self.context_idxs[idx],
                    self.context_char_idxs[idx],
+                   self.context_tags[idx],
                    self.question_idxs[idx],
                    self.question_char_idxs[idx],
+                   self.question_tags[idx],
                    self.y1s[idx],
                    self.y2s[idx],
                    self.ids[idx])
@@ -125,21 +131,23 @@ def collate_fn(examples):
         return padded
 
     # Group by tensor type
-    context_idxs, context_char_idxs, \
-        question_idxs, question_char_idxs, \
+    context_idxs, context_char_idxs, context_tags, \
+        question_idxs, question_char_idxs, question_tags, \
         y1s, y2s, ids = zip(*examples)
 
     # Merge into batch tensors
     context_idxs = merge_1d(context_idxs)
     context_char_idxs = merge_2d(context_char_idxs)
+    context_tags = merge_1d(context_tags)
     question_idxs = merge_1d(question_idxs)
     question_char_idxs = merge_2d(question_char_idxs)
+    question_tags = merge_1d(question_tags)
     y1s = merge_0d(y1s)
     y2s = merge_0d(y2s)
     ids = merge_0d(ids)
 
-    return (context_idxs, context_char_idxs,
-            question_idxs, question_char_idxs,
+    return (context_idxs, context_char_idxs, context_tags,
+            question_idxs, question_char_idxs, question_tags,
             y1s, y2s, ids)
 
 
