@@ -23,6 +23,7 @@ from collections import Counter
 from subprocess import run
 from tqdm import tqdm
 from zipfile import ZipFile
+from itertools import chain
 
 
 def download_url(url, output_path, show_progress=True):
@@ -68,11 +69,13 @@ def download(args):
                     zip_fh.extractall(extracted_path)
 
     print('Downloading spacy language model...')
-    run(['python', '-m', 'spacy', 'download', 'en'])
-
+    run(['python', '-m', 'spacy', 'download', 'en_core_web_sm'])
+    
 def word_tokenize(sent):
     doc = nlp(sent)
-    return [token.text for token in doc]
+    tokens = [token.text for token in doc]
+    tag = [tag_to_idx[token.tag_] for token in doc]
+    return tokens, tag
 
 
 def convert_idx(text, tokens):
@@ -99,7 +102,7 @@ def process_file(filename, data_type, word_counter, char_counter):
             for para in article["paragraphs"]:
                 context = para["context"].replace(
                     "''", '" ').replace("``", '" ')
-                context_tokens = word_tokenize(context)
+                context_tokens, context_tag = word_tokenize(context)
                 context_chars = [list(token) for token in context_tokens]
                 spans = convert_idx(context, context_tokens)
                 for token in context_tokens:
@@ -110,7 +113,7 @@ def process_file(filename, data_type, word_counter, char_counter):
                     total += 1
                     ques = qa["question"].replace(
                         "''", '" ').replace("``", '" ')
-                    ques_tokens = word_tokenize(ques)
+                    ques_tokens, ques_tag = word_tokenize(ques)
                     ques_chars = [list(token) for token in ques_tokens]
                     for token in ques_tokens:
                         word_counter[token] += 1
@@ -132,8 +135,10 @@ def process_file(filename, data_type, word_counter, char_counter):
                         y2s.append(y2)
                     example = {"context_tokens": context_tokens,
                                "context_chars": context_chars,
+                               "context_tag": context_tag,
                                "ques_tokens": ques_tokens,
                                "ques_chars": ques_chars,
+                               "ques_tag": ques_tag,
                                "y1s": y1s,
                                "y2s": y2s,
                                "id": total}
@@ -186,8 +191,8 @@ def convert_to_features(args, data, word2idx_dict, char2idx_dict, is_test):
     context, question = data
     context = context.replace("''", '" ').replace("``", '" ')
     question = question.replace("''", '" ').replace("``", '" ')
-    example['context_tokens'] = word_tokenize(context)
-    example['ques_tokens'] = word_tokenize(question)
+    example['context_tokens'], context_tag = word_tokenize(context)
+    example['ques_tokens'], ques_tag = word_tokenize(question)
     example['context_chars'] = [list(token) for token in example['context_tokens']]
     example['ques_chars'] = [list(token) for token in example['ques_tokens']]
 
@@ -236,7 +241,7 @@ def convert_to_features(args, data, word2idx_dict, char2idx_dict, is_test):
                 break
             ques_char_idxs[i, j] = _get_char(char)
 
-    return context_idxs, context_char_idxs, ques_idxs, ques_char_idxs
+    return context_idxs, context_char_idxs, context_tag, ques_idxs, ques_char_idxs, ques_tag
 
 
 def is_answerable(example):
@@ -266,8 +271,10 @@ def build_features(args, examples, data_type, out_file, word2idx_dict, char2idx_
     meta = {}
     context_idxs = []
     context_char_idxs = []
+    context_tags = []
     ques_idxs = []
     ques_char_idxs = []
+    ques_tags = []
     y1s = []
     y2s = []
     ids = []
@@ -292,8 +299,10 @@ def build_features(args, examples, data_type, out_file, word2idx_dict, char2idx_
 
         context_idx = np.zeros([para_limit], dtype=np.int32)
         context_char_idx = np.zeros([para_limit, char_limit], dtype=np.int32)
+        context_tag = np.zeros([para_limit], dtype=np.int32)
         ques_idx = np.zeros([ques_limit], dtype=np.int32)
         ques_char_idx = np.zeros([ques_limit, char_limit], dtype=np.int32)
+        ques_tag = np.zeros([ques_limit], dtype=np.int32)
 
         for i, token in enumerate(example["context_tokens"]):
             context_idx[i] = _get_word(token)
@@ -317,6 +326,14 @@ def build_features(args, examples, data_type, out_file, word2idx_dict, char2idx_
                 ques_char_idx[i, j] = _get_char(char)
         ques_char_idxs.append(ques_char_idx)
 
+        for i, tag in enumerate(example["context_tag"]):
+            context_tag[i] = tag
+        context_tags.append(context_tag)
+        
+        for i, tag in enumerate(example["ques_tag"]):
+            ques_tag[i] = tag
+        ques_tags.append(ques_tag)
+        
         if is_answerable(example):
             start, end = example["y1s"][-1], example["y2s"][-1]
         else:
@@ -329,8 +346,10 @@ def build_features(args, examples, data_type, out_file, word2idx_dict, char2idx_
     np.savez(out_file,
              context_idxs=np.array(context_idxs),
              context_char_idxs=np.array(context_char_idxs),
+             context_tags=np.array(context_tags),
              ques_idxs=np.array(ques_idxs),
              ques_char_idxs=np.array(ques_char_idxs),
+             ques_tags=np.array(ques_tags),
              y1s=np.array(y1s),
              y2s=np.array(y2s),
              ids=np.array(ids))
@@ -383,7 +402,11 @@ if __name__ == '__main__':
     download(args_)
 
     # Import spacy language model
-    nlp = spacy.blank("en")
+    nlp = spacy.load("en_core_web_sm", disable=['parser', 'ner', 'textcat'])
+    tag_keys = nlp.tokenizer.vocab.morphology.tag_map.keys()
+    tag_to_idx = {pos: (idx + 2) for (pos, idx) in zip(tag_keys, range(len(tag_keys)))}
+    # Range: 0~51, 0 for padding, 1 for unknown.
+    tag_to_idx[''] = 1 # Unknown
 
     # Preprocess dataset
     args_.train_file = url_to_data_path(args_.train_url)
